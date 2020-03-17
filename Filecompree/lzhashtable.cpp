@@ -29,3 +29,6 @@ void LZhashtable::insert(USH& matchhead, UCH ch, USH pos, USH& hashaddr) {
 	_head[hashaddr] = pos;
 
 }
+USH LZhashtable::getnext(USH matchhead) {
+	return _prev[matchhead&HASH_MASK];
+}
