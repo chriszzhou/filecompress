@@ -13,6 +13,7 @@ int main() {
 #include"LZ77.h"
 int main() {
 	LZ77 lz;
+	lz.compressfile("1.txt");
 	lz.uncompressfile("2.lzp");
 	return 0;
 }

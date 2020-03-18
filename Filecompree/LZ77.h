@@ -61,6 +61,7 @@ private:
 			bitcount = 0;
 		}
 	}
+	void mergefile( FILE* fout, ULL filesize);
 private:
 	UCH* _pwin;  //用来保存待压缩数据的缓冲区
 	LZhashtable _ht;

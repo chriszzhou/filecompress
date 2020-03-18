@@ -138,6 +138,7 @@
   <ItemGroup>
     <Text Include="2.txt" />
     <Text Include="3.txt" />
+    <Text Include="4.txt" />
     <Text Include="fout.txt" />
   </ItemGroup>
   <ItemGroup>
