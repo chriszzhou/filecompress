@@ -62,6 +62,7 @@ private:
 		}
 	}
 	void mergefile( FILE* fout, ULL filesize);
+	void fillwindows(FILE* fin, size_t& lookahead);
 private:
 	UCH* _pwin;  //用来保存待压缩数据的缓冲区
 	LZhashtable _ht;

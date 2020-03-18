@@ -8,6 +8,7 @@ public:
 	void hashfunc(USH& hashaddr, UCH ch);
 	USH H_SHIFT();
 	USH getnext(USH matchhead);
+	void update();
 private:
 	USH * _prev;
 	USH * _head;

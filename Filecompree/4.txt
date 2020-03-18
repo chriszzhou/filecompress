@@ -1,1 +1,4800 @@
-mnoabczxyuvwabc123456abczxydefgh
+#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}
+}
+#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}
+}
+#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}
+}
+#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}
+}
+#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}
+}
+#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}
+}
+#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}
+}
+#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookaheadsfn =::mergefile(FILE* fout,ULL filesize) {
+«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout)er	chflag <<= (8 - b  lopen("4.txt", "wb");WSIZE, fin);
+	}#in;
+		r//dlibdlibeek(¼ÆËãµÄ) {
+«b")Ç°Á½ibee½atchfor (
+	/ing & /in_MATCH) {
+&&(1; ++ichlengt»´¦Àrfilf	lo(rfilepatĞ¡
+	FILi]rtÎ»ÖÃ×Ö·ûĞ×Ö·ûĞ		}
+	}
+	if (natchlen = curmatc´óÓÚwsize -wsize
+		fseek(fin, 0, SEEze
+		//1.½«
+	//Ñ¹Ëõ
+le (ø
+			£¬²¢ize_:endÍ·engt»´¦À 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şĞ´È£±í¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht//2.ÑéÖ¤ÔÚ_pwi/2.ÑéÖ¤ÔÚÇ·ñ<< ":ende
+	if (
+	_ht.upd!_str(), "rbë²éÕ×î³¤:end,´ø³öSH hashaddize), seek(fin, 0, SEElongestek(fi	//1.½«µ±Ç°×e;
+	FILE *fo¬²¢»ñhlength = pen faseek(fin, 0, S_MATCH) {
+r(), "rbë²Ã»<< "= 0; i < ¬²¢»ñ¸öÊıÑ¹Ëõr = 0;
+	USHad(&flagsizÖ·û´®²åÈë¹ş±í£
+	assert(fout)
+	//(files¶ÔÓ¦µÄ;
+	FILE* foutf = fopen("3
+			//b");
+	aslen, ssert(f++åÈë¹şoutf);
+	//Ò»¸ö, 0 - sieof(flagsize) - sizeof<< "ÁË= 0; i < SH hashaddr = 0;
+	USH  = 0; i 
+		´SH hxt"ÚĞ´asha¡£ÎªÁËºÍH;
+man½áºÏ= 0; /¶ÁÈ¡w) {
+	aseek(fin, 0, S-trfilepalagsize,n, í£
+	ass//×îÉÙÊÇ3¸ö£¬
+		sÓÃ0±íÊ¾3ilepalt<filese;
+	FILE *fo	if (bite;
+	FILE *f 0) {
+			chfla(fout);
+	FILE* foutf = fopen("3È¡wsize,½ÓÒ´°¿Ú
+, ullptoutf);
+	//Ò»¸ö -
+	aseek(fin, 0, s//º³åÇ
+		//2.ÑéÖ¤ÔÚ²éÕÒ»while (; i < 	whi:endµÄÑ¹Ëõ
+°´Èıibdl×é½«Æäle (µ½ø
+			ÖĞe (; nsert(matchhead, //
+	//Ñ¹Ëõ
+	while (ilesize), SEert(matchhead,
+	fread( + 2],start,gt»´¦À 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹ş+£±íÚ
+	meÈ¡Æ¥ÅäÍ·
+		_ht; nsert(matchhead,  - sizeof(( + 2],start,zeof(//¼ì²â
+		//2.ÑéÖ¤ÔÚ²éÕÒ»·ûND); = pen fnatchlen =e(&flagsLOOKHEAD)&&) {
+				//c
+	freadag & 0x80) {e(fiatchlen = tart,zeofÃ×Ö·ûĞ¶ÔĞ´È»Êı²»×ã8Î» 1, fouÓÒ´°¿Ú
+	>hea&&½ÓÒ´°¿Ú
+	< 8 curmatc¼ÇÖ¸ÕëÒÆ¶¯(8S-tÓÒ´°¿Ú
+UCH matagsize,size,}#in;
+		rÃ×Ö·ûĞ½«buff	USH+¶ÔĞ´ÈëÑ¹ºÏ²¢tchftr == fin2;
+		r//¿ªÊ¼½âÑ¹/Ğ´Èë¹ËõÊı¾İ
+				bitcount = ize) - flagsize-sizeof(filesiin2;
+		
+	fclose(f);
+	lo
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout)hlen = curma2chlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	size_size +agsize f, 1, rdsize, f
+				start++;
+				_ht.inserttart+2], start,hashaddr);
+				ze) {
+		if (bitcount == 0) {
+rt++;
+		}ize_¶ÔĞ´Ò»while (t(fout);
+	FILE* f = fo	if ((lookahead <= MIN_LOOKHEAD)&&(t.inserttart+2], start,hashaddr);
+				ULL encodecount = 0;
+	while (ert++;
+		}½«¶ÔĞ´ËõÎÄÒÆ¶¯µ½¶ÔĞ´buffµÄÆğÊ¼¸öÊı fo	if ((lookahead <= MIN_LOOKHEAD)&&(LOOKHEAD-t.inserttart+2], start,hashaddr//¿ªÊ¼ê¼ÇÎ»Êë
+			 = ê¼ÇÎ»Êbuff;
+ (8 - b  litcount);
+		fputc(WSIZE, fin);
+	}#include"LZ77.hitcount);
+		fputc(ist),ist, S:endÄÚÈf;
+ fout)hlen = curchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+ÖÃµ½ÓÒ´°¿Ú
+	if (!fe/¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ SEEKı¾İ·ÅÖÃµ½}
+	FILE* füĞÂ¹şÏ£±í
+	_hze -wsize
+	f, 1th.c_str(), size
+	ze), SEth.c_str(),<ËõÊı¾İ
+	FILE*, fouÓÒ´°¿Ú
+	 cutr(), "rb¡wsize¸öÊ_END);
+	++;
+	¼ÇÊı¾İµÄÆğ¸öÊ8length = pen fawsize¸& 0x8tr(), "rbë²ÊÇILE, "rb}
+	FILE* f_END);
+	frĞ´Èrfilepath.c_str(), ÔÚ»}
+	FILEfilepaltr == fin2),is
+		sµÃÇå¿Õ/2.ÑéÖilepal;
+			
+	FILE *fo	if (bit
+	FILE *f 0) {
+
+	fread(&fist¨Î»ÈëÑ¹ËõÎÄ¼ş palif ((lahe-
+	FILE *fo	tart,hashaddrsize), SE}
+	FILE
+	fread(//chÎª255£¬ÒòÎªbuffÔÚ/2.ÑéÖ£¬»¹Ã»	 = fread( SEEK_END);
+		_ht; lagsize, sizeof(flagsb}
+	FILE, 0 - sih = pflagsize) - sizeof(files, "rb¡w* f_END);
+	frfilepalagsize, sizeof(flagsth.c_str(),,start,zeof(c¼ÇÖ¸ÕëÒÆ¶¯1tart,Êı¾İµÄÆğ, 0 - )
+		tcount = frfile	tcount = ++;
+	- flagsize-sizeof(filesi
+		
+	fclose(f);
+//¿ªÊ¼½âÑ¹ (8 - b  l,f, 1, rdsize
+	fre			fwriteopen("4.txt", "wb");ist), 1,t(fout);
+	FILE* f = foÖÃµ*c(fin2);
+clos		}
+		std:]e
+	ze), SEullpthlength(fout)
+	USH LE* fin,sflag = 0;
+	UCstd:{
+
+	
+		_hten f0	 cu
+	USH <= 1t,ÊlagkCH matt<fileflag = 0;
+	UC
+	USH  sizeof(flag;
+	FILE*ÔÚ»
+	USH 0 - )
+		t<filesiULL encodecount = 0;
+	while (eze-sizeoft<filesize) {
+		if (bitcount == 0) {
+ze-sizeo1);
+	fclflag = 0;file	tcount = i
+		
+	fclose(f);
+ag & 0x80) {			fwrite,h(fout&windows(FI)e) {
+½«le (mabuff°áÒÆµ½odecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+					
+	f		//Ô­×Ö"(f);.h"
+			//Ô­×Ö·iourmeam
+			//Ô­×Ö·in);
+ch = f	//Ô­×Ö·;//libch = fpragma warnE* (E *able:4996<= (f);
+	fclos
+		:¬»¹Ã»(s		}
+		= fge*2]s
+		,ad((;//ËùÒ{
+	f(f);
+~	fcloshÎª251);
+	fcl¬»¹Ã»
+		¬»¹Ã»Ğlos)hlen 
+		
+	fclose(f);
+o
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+Èç¹ûsize +	fseATCH) {
+&xt"ò²»«b")
+		}ize_ze +agsize 			fwrite&curmatchdist, sizeof(curmatchdist), 1, fout)hlen = curmachlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	fclose(finf);
+}
+hashaddrf, 1, rdsize, fftellt = izof(ize +µÄşÖ¸Õë
+ fou, rdsize,(&flags) {
+r(), "rh - 3;
+			fpu, rd smallfout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	s´Ó0;
+	USHt, Sdlib/2.ÑéÖµÄbuff;
+	fclose(finf);
+}
+SET), 1,t(fout)windows(FILE* fin,shlen;
+ch 2 * = fgetc(f);ë²Êµ¼Êt, S¶àÉÙÂ¹şÏ£±íåÈë¹şĞsize
+	//Ğ¡_pwie ÖÃÎª0
+	//£±í¡Æ¥ÅäÍ·* füĞÂ¹şÏ£±í
+	_hs(FILE*ÄÏÂ±ê
+	//´óÓÚwsin, 0, SEEze
+	
+	//´óÓÚwsize -wsize
+	//Ğ¡t);
+	e ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!febool isILE* f_en, lude"LZ7 *b  litcount);2.lzputc(WSIZE, fin);
+	}#include"LZ77.hin2;pen("4.txt", "wb");WSIZE, fin);
+	}#in
+		_h//dlibdlibiles¼ÆËãµÄ3
+	s´b")Ç°Á½ibil½atchfor (
+	/i	if (/i	_MATCH) {
+&&(1; ++ir(), "rad(&¡Æ¥Åf	lo(¡Æ¥ÅäÍ·°×Ö·û´®²i]
+		rÃ×Ö·ûĞ×Ö·ûĞÇÎ»Êë
+ze), SEindows(FI)curmatc´óÓÚwsize -wsize
+	, seek(fin, 0, SEEze
+	,//1.½«
+	//Ñ¹Ëõ
+le (ø
+			£¬²¢ize_:endÍ·, "rad(& 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şĞ´È£±í
+	meÈ¡Æ¥ÅäÍ·
+		_ht//2.ÑéÖ¤ÔÚ_pwi/2.ÑéÖ¤ÔÚÇ·ñ<< ":end	_hten f
+	_hs(FIL!cutr(), "rbof<<×î³¤:end,´ø³öSH hashadd, "rb¡seek(fin, 0, SEElongestek(fi	//1.½«µ±Ç°×e;
+	FILE *fo
+	me tart,zeofpen faseek(fin, 0, S_MATCH) {
+r(), "rbofÃ»<< "e (; i < 
+	me¸öÊıÑ¹Ëõr = 0;
+	USHilepalagsizÖ·û´®²åÈë¹ş±íÚ
+			chfla(fout)
+	//(files¶ÔÓ¦µÄ;
+	FILE* foutf = fopen("3e,size,ÓÒ´°¿Ú
+,_en, chfla(f++åÈë¹şoutf);
+	//Ò»¸ö, 0 - si = pflagsize) - sizeof<< "ÁËe (; i < SH hashaddr = 0;
+	USH  e (; i 
+		´SH hxt"ÚĞ´asha¡£ÎªÁËºÍH 0;man½áºÏe (; /¶ÁÈ¡wILE* faseek(fin, 0, S-Èrfilepalagsize,n, íÚ
+			ch//×îÉÙÊÇ3¸ö£¬
+		sÓÃ0±íÊ¾3ilepalt<filese;
+	FILE *fo	if (bite;
+	FILE *f 0) {
+ze-sizeo(fout);
+	FILE* foutf = fopen("3È¡wsize,½ÓÒ´°¿Ú
+, ullptoutf);
+	//Ò»¸ö - faseek(fin, 0, h//º³åÇ
+		//2.ÑéÖ¤ÔÚ²éÕÒ»while (; i < 	whi:endµÄÑ¹Ëõ
+°´Èıibdl×é½«Æäle (µ½ø
+			ÖĞe (; nsert(matchhead, //
+	//Ñ¹Ëõ
+	while (ddrsize), SEert(matchhead,
+	fread( + 2],start,"rad(& 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹ş+£±ííåÈë¹şÈ¡Æ¥ÅäÍ·
+		_ht; nsert(matchhead,  - sih = p( + 2],start,h = p//¼ì²â
+		//2.ÑéÖ¤ÔÚ²éÕÒ»·ûND);eofpen fEindows(FI,(&flagsLOOKHEAD)&&) {
+				//c
+	freadag & 0x80) {e(fiindows(FI)tart,h = Ã×Ö·ûĞ¶ÔĞ´È»Êı²»×ã8Î»ë
+ fouÓÒ´°¿Ú
+	>hea&&½ÓÒ´°¿Ú
+	< 8)curmatc¼ÇÖ¸ÕëÒÆ¶¯(8S-ÈÓÒ´°¿Ú
+f(flag;agsize,size,}#in
+		_hÃ×Ö·ûĞ½«buff	USH+¶ÔĞ´ÈëÑ¹ºÏ²¢tchftr == fin2
+		_h//¿ªÊ¼½âÑ¹b  l,1, rdsizefile	tcount = +;
+	- flagsize-sizeof(filesiin2
+		_
+	fclose(f);
+	lo
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout)hlen = curma2chlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	}ize_(ize +agsize f, 1, rdsize, f = fo	if ((lookahead <= MIN_Ltart+2], start,hashaddr);
+				ze) {
+		if (bitcount == 0) {
+rt++;
+		}ize_¶ÔĞ´Ò»while (t(fout);
+	FILE* f = fo	if ((lookahead <= MIN_LOOKHEAD)&&(<= MIN_Ltart+2], start,hashaddr);
+				ULL encodecount = 0;
+	while (ert++;
+		}½«¶ÔĞ´ËõÎÄÒÆ¶¯µ½¶ÔĞ´buffµÄÆğÊ¼¸öÊı fo	if ((lookahead <= MIN_LOOKHEAD)&&(LOOKHEAD-<= MIN_Ltart+2], start,hashaddr//¿ªÊ¼ê¼ÇÎ»Êë
+			 = ê¼ÇÎ»Êbuff;
+"LZ77.hin2itcount);
+		fputc(WSIZE, fin);
+	}#include"LZ77.hitcount);
+		fputc(ist),ist, S:endÄÚÈf;
+ fout)hlen = curchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+ÖÃµ½ÓÒ´°¿Ú
+	if (!fe/¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½¡w* fı¾İ·ÅÖÃµ½}
+	FILE* füĞÂ¹şÏ£±í
+	_hze -wsize
+	f, 1th.c_str(), size
+	ze), SEth.c_str(),<, rdsize
+	fre
+ fouÓÒ´°¿Ú
+	 cutr(), "rb¡wsize¸öÊ_END);
+	++;
+	t,Êı¾İµÄÆğ¸öÊ8tart,zeofpen fawsize¸& 0x8tr(), "rbofÊÇILE, "rb}
+	FILE* f_END);
+	frĞ´Èrfilepath.c_str(), ÔÚ»}
+	FILEfilepaltr == fin2),is
+		sµÃÇå¿Õ/2.ÑéÖilepal;
+			
+	FILE *fo	if (bit
+	FILE *f 0) {
+
+	frfilepaist¨Î»ÈëÑ¹ËõÎÄ¼ş palif ((lahe-
+	FILE *fo	tart,hashaddrsize), SE}
+	FILE
+	fread(//chÎª255£¬ÒòÎªbuffÔÚ/2.ÑéÖ£¬»¹Ã»	 = fread(¡w* f_END);
+		_ht; lagsize, sizeof(flagsb}
+	FILE, 0 - sizeofpflagsize) - sizeof(files, "rb¡w* f_END);
+	frfilepalagsize, sizeof(flagsth.c_str(),,start,h = pc¼ÇÖ¸ÕëÒÆ¶¯1tart,Êı¾İµÄÆğ, 0 - ¾3
+	tcount = frfile	tcount = ++;
+	- flagsize-sizeof(filesi
+		_
+	fclose(f);
+//¿ªÊ¼½âÑ¹"LZ77.hin2,f, 1, rdsize
+	fre			fwrite;pen("4.txt", "wb");ist), 1,t(fout);
+	FILE* f = foÖÃµ*lflag = 0;Ğlos		}
+		std:]e
+	ze), SEullpthlength(fout)
+	USH LE* fin,sflag = 0;
+	UCstd:{
+
+	
+		_hten f0	 cu
+	USH s
+		t,Êlagk(flag;t<fileflag = 0;
+	UC
+	USH  sizeof(flag;
+	FILE*ÔÚ»
+	USH 0 - ¾3
+	t<filesiULL encodecount = 0;
+	while (eze-sizeoft<filesize) {
+		if (bitcount == 0) {
+ze-sizeo1);
+	fclflag = 0;file	tcount = i
+		_
+	fclose(f);
+ag & 0x80) {			fwrite,h(fout&windows(FI)e) {
+½«le (mabuff°áÒÆµ½odecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+			f	//Ô­×Ö"(f);.h"= f	//Ô­×Ö·iourmeam = f	//Ô­×Ö·in);
+ch = f	//Ô­×Ö·;//libch = fpragma warnE* (E *able:4996s
+	(f);
+	fclos
+		:¬»¹Ã»(s		}
+		= fge*2]s
+		,ad((;//ËùÒ{
+	f(f);
+~	fcloshÎª251);
+	fcl¬»¹Ã»
+		¬»¹Ã»Ğlos)hlen 		_
+	fclose(f);
+o
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+Èç¹û(ize +	fseATCH) {
+&xt"ò²»´b")
+		}ize_ze +agsize 			fwrite&curmatchdist, sizeof(curmatchdist), 1, fout)hlen = curmachlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	fclose(finf);
+}
+hashaddrf, 1, rdsize, fftellt = +;of(ize +µÄşÖ¸Õë
+ fou, rdsize,(&flags) {
+r(), "rh - 3;
+			fpu, rd smallfout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	}´Ó0;
+	USHt, Sdlib/2.ÑéÖµÄbuff;
+	fclose(finf);
+}
+SET), 1,t(fout)windows(FILE* fin,shlen;
+ch 2 * = fgetc(f);ofÊµ¼Êt, S¶àÉÙÂ¹şÏ£±íåÈë¹şĞsize
+	//Ğ¡_pwie ÖÃÎª0
+	//£±í¡Æ¥ÅäÍ·* füĞÂ¹şÏ£±í
+	_hs(FILE*ze
+	
+	//´óÓÚwsin, 0, SEEze
+	
+	//´óÓÚwsize -wsize
+	//Ğ¡t);
+	e ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!febool isILE* f_en, lude"LZ7 *hin2itcount);2.lzputc(WSIZE, fin);
+	}#include"LZ77.hin2pen("4.txt", "wb");WSIZE, fin);
+	}#in
+		_h//dlibdlibiles¼ÆËãµÄ3
+	}´b")Ç°Á½ibil½atchfor (
+	/i	if (/i	_MATCH) {
+&&(1; ++ir(), "rad(&¡Æ¥Åf	lo(¡Æ¥ÅäÍ·°×Ö·û´®²i]
+		_hÃ×Ö·ûĞ×Ö·ûĞÇÎ»Êë
+ze), SEindows(FI)curmatc´óÓÚwsize -wsize
+	b¡seek(fin, 0, SEEze
+	b//1.½«
+	//Ñ¹Ëõ
+le (ø
+			£¬²¢ize_:endÍ·, "rad(& 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şĞ´È£±íåÈë¹şÈ¡Æ¥ÅäÍ·
+		_ht//2.ÑéÖ¤ÔÚ_pwi/2.ÑéÖ¤ÔÚÇ·ñ<< ":end	_hten f
+	_hs(FIL!cutr(), "rbof<<×î³¤:end,´ø³öSH hashadd, "rb¡seek(fin, 0, SEElongestek(fi	//1.½«µ±Ç°×e;
+	FILE *foåÈë¹ş)tart,h = pen faseek(fin, 0, S_MATCH) {
+r(), "rbofÃ»<< "e (; i < åÈë¹ş¸öÊıÑ¹Ëõr = 0;
+	USHilepalagsizÖ·û´®²åÈë¹ş±íí
+ze-sizeo(fout)
+	//(files¶ÔÓ¦µÄ;
+	FILE* foutf = fopen("3e,size,ÓÒ´°¿Ú
+,_en, sizeo(f++åÈë¹şoutf);
+	//Ò»¸ö, 0 - sieofpflagsize) - sizeof<< "ÁËe (; i < SH hashaddr = 0;
+	USH  e (; i 
+		´SH hxt"ÚĞ´asha¡£ÎªÁËºÍH 0;man½áºÏe (; /¶ÁÈ¡wILE* faseek(fin, 0, S-Èrfilepalagsize,n, íí
+ze-si//×îÉÙÊÇ3¸ö£¬
+		sÓÃ0±íÊ¾3ilepalt<filese;
+	FILE *fo	if (bite;
+	FILE *f 0) {
+ze-sizeo(fout);
+	FILE* foutf = fopen("3È¡wsize,½ÓÒ´°¿Ú
+, ullptoutf);
+	//Ò»¸ö - faseek(fin, 0, i//º³åÇ
+		//2.ÑéÖ¤ÔÚ²éÕÒ»while (; i < 	whi:endµÄÑ¹Ëõ
+°´Èıibdl×é½«Æäle (µ½ø
+			ÖĞe (; nsert(matchhead, //
+	//Ñ¹Ëõ
+	while (ddrsize), SEert(matchhead,
+	fread( + 2],start,"rad(& 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹ş+£±ííåÈë¹şÈ¡Æ¥ÅäÍ·
+		_ht; nsert(matchhead,  - sizeofp( + 2],start,zeofp//¼ì²â
+		//2.ÑéÖ¤ÔÚ²éÕÒ»·ûND); = pen fEindows(FI,(&flagsLOOKHEAD)&&) {
+				//c
+	freadag & 0x80) {e(fiindows(FI)tart,zeofÃ×Ö·ûĞ¶ÔĞ´È»Êı²»×ã8Î»ë
+ fouÓÒ´°¿Ú
+	>hea&&½ÓÒ´°¿Ú
+	< 8)curmatc¼ÇÖ¸ÕëÒÆ¶¯(8S-ÈÓÒ´°¿Ú
+f(flag;agsize,size,}#in
+		_hÃ×Ö·ûĞ½«buff	USH+¶ÔĞ´ÈëÑ¹ºÏ²¢tchftr == fin2
+		_h//¿ªÊ¼½âÑ¹hin2,1, rdsizefile	tcount = +;
+	- flagsize-sizeof(filesiin2
+		_
+	fclose(f);
+	lo
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout)hlen = curma2chlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	}ize_(ize +agsize f, 1, rdsize, f = fo	if ((lookahead <= MIN_Ltart+2], start,hashaddr);
+				ze) {
+		if (bitcount == 0) {
+rt++;
+		}ize_¶ÔĞ´Ò»while (t(fout);
+	FILE* f = fo	if ((lookahead <= MIN_LOOKHEAD)&&(<= MIN_Ltart+2], start,hashaddr);
+				ULL encodecount = 0;
+	while (ert++;
+		}½«¶ÔĞ´ËõÎÄÒÆ¶¯µ½¶ÔĞ´buffµÄÆğÊ¼¸öÊı fo	if ((lookahead <= MIN_LOOKHEAD)&&(LOOKHEAD-<= MIN_Ltart+2], start,hashaddr//¿ªÊ¼ê¼ÇÎ»Êë
+			 = ê¼ÇÎ»Êbuff;
+"LZ77.hin2itcount);
+		fputc(WSIZE, fin);
+	}#include"LZ77.hitcount);
+		fputc(ist),ist, S:endÄÚÈf;
+ fout)hlen = curchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+ÖÃµ½ÓÒ´°¿Ú
+	if (!fe/¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½¡w* fı¾İ·ÅÖÃµ½}
+	FILE* füĞÂ¹şÏ£±í
+	_hze -wsize
+	f, 1th.c_str(), size
+	ze), SEth.c_str(),<, rdsize
+	fre
+ fouÓÒ´°¿Ú
+	 cutr(), "rb¡wsize¸öÊ_END);
+	++;
+	t,Êı¾İµÄÆğ¸öÊ8tart,h = pen fawsize¸& 0x8tr(), "rbofÊÇILE, "rb}
+	FILE* f_END);
+	frĞ´Èrfilepath.c_str(), ÔÚ»}
+	FILEfilepaltr == fin2),is
+		sµÃÇå¿Õ/2.ÑéÖilepal;
+			
+	FILE *fo	if (bit
+	FILE *f 0) {
+
+	frfilepaist¨Î»ÈëÑ¹ËõÎÄ¼ş palif ((lahe-
+	FILE *fo	tart,hashaddrsize), SE}
+	FILE
+	fread(//chÎª255£¬ÒòÎªbuffÔÚ/2.ÑéÖ£¬»¹Ã»	 = fread(¡w* f_END);
+		_ht; lagsize, sizeof(flagsb}
+	FILE, 0 - sih = pflagsize) - sizeof(files, "rb¡w* f_END);
+	frfilepalagsize, sizeof(flagsth.c_str(),,start,zeofpc¼ÇÖ¸ÕëÒÆ¶¯1tart,Êı¾İµÄÆğ, 0 - ¾3
+	tcount = frfile	tcount = ++;
+	- flagsize-sizeof(filesi
+		_
+	fclose(f);
+//¿ªÊ¼½âÑ¹"LZ77.hin2,f, 1, rdsize
+	fre			fwritepen("4.txt", "wb");ist), 1,t(fout);
+	FILE* f = foÖÃµ*lflag = 0;Ğlos		}
+		std:]e
+	ze), SEullpthlength(fout)
+	USH LE* fin,sflag = 0;
+	UCstd:{
+
+	
+		_hten f0	 cu
+	USH s
+		t,Êlagk(flag;t<fileflag = 0;
+	UC
+	USH  sizeof(flag;
+	FILE*ÔÚ»
+	USH 0 - ¾3
+	t<filesiULL encodecount = 0;
+	while (eze-sizeoft<filesize) {
+		if (bitcount == 0) {
+ze-sizeo1);
+	fclflag = 0;file	tcount = i
+		_
+	fclose(f);
+ag & 0x80) {			fwrite,h(fout&windows(FI)e) {
+½«le (mabuff°áÒÆµ½odecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				_
+	ff	//Ô­×Ö"(f);.h"= f	//Ô­×Ö·iourmeam = f	//Ô­×Ö·in);
+ch = f	//Ô­×Ö·;//libch = fpragma warnE* (E *able:4996s
+	(f);
+	fclos
+		:¬»¹Ã»(s		}
+		= fge*2]s
+		,ad((;//ËùÒ{
+	f(f);
+~	fcloshÎª251);
+	fcl¬»¹Ã»
+		¬»¹Ã»Ğlos)hlen 		_
+	fclose(f);
+o
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+Èç¹û(ize +	fseATCH) {
+&xt"ò²»´b")
+		}ize_ze +agsize 			fwrite&curmatchdist, sizeof(curmatchdist), 1, fout)hlen = curmachlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	fclose(finf);
+}
+hashaddrf, 1, rdsize, fftellt = +;of(ize +µÄşÖ¸Õë
+ fou, rdsize,(&flags) {
+r(), "rh - 3;
+			fpu, rd smallfout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	}´Ó0;
+	USHt, Sdlib/2.ÑéÖµÄbuff;
+	fclose(finf);
+}
+SET), 1,t(fout)windows(FILE* fin,shlen;
+ch 2 * = fgetc(f);ofÊµ¼Êt, S¶àÉÙÂ¹şÏ£±íåÈë¹şĞsize
+	//Ğ¡_pwie ÖÃÎª0
+	//£±í¡Æ¥ÅäÍ·* füĞÂ¹şÏ£±í
+	_hs(FILE*ze
+	
+	//´óÓÚwsin, 0, SEEze
+	
+	//´óÓÚwsize -wsize
+	//Ğ¡t);
+	e ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!febool isILE* f_en, lude"LZ7 *hin2itcount);2.lzputc(WSIZE, fin);
+	}#include"LZ77.hin2pen("4.txt", "wb");WSIZE, fin);
+	}#in
+		_h//dlibdlibiles¼ÆËãµÄ3
+	}´b")Ç°Á½ibil½atchfor (
+	/i	if (/i	_MATCH) {
+&&(1; ++ir(), "rad(&¡Æ¥Åf	lo(¡Æ¥ÅäÍ·°×Ö·û´®²i]
+		_hÃ×Ö·ûĞ×Ö·ûĞÇÎ»Êë
+ze), SEindows(FI)curmatc´óÓÚwsize -wsize
+	b¡seek(fin, 0, SEEze
+	b//1.½«
+	//Ñ¹Ëõ
+le (ø
+			£¬²¢ize_:endÍ·, "rad(& 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şĞ´È£±íåÈë¹şÈ¡Æ¥ÅäÍ·
+		_ht//2.ÑéÖ¤ÔÚ_pwi/2.ÑéÖ¤ÔÚÇ·ñ<< ":end	_hten f
+	_hs(FIL!cutr(), "rbof<<×î³¤:end,´ø³öSH hashadd, "rb¡seek(fin, 0, SEElongestek(fi	//1.½«µ±Ç°×e;
+	FILE *foåÈë¹ş)tart,zeofpen faseek(fin, 0, S_MATCH) {
+r(), "rbofÃ»<< "e (; i < åÈë¹ş¸öÊıÑ¹Ëõr = 0;
+	USHilepalagsizÖ·û´®²åÈë¹ş±íí
+ze-sizeo(fout)
+	//(files¶ÔÓ¦µÄ;
+	FILE* foutf = fopen("3e,size,ÓÒ´°¿Ú
+,_en, sizeo(f++åÈë¹şoutf);
+	//Ò»¸ö, 0 - si = pflagsize) - sizeof<< "ÁËe (; i < SH hashaddr = 0;
+	USH  e (; i 
+		´SH hxt"ÚĞ´asha¡£ÎªÁËºÍH 0;man½áºÏe (; /¶ÁÈ¡wILE* faseek(fin, 0, S-Èrfilepalagsize,n, íí
+ze-si//×îÉÙÊÇ3¸ö£¬
+		sÓÃ0±íÊ¾3ilepalt<filese;
+	FILE *fo	if (bite;
+	FILE *f 0) {
+ze-sizeo(fout);
+	FILE* foutf = fopen("3È¡wsize,½ÓÒ´°¿Ú
+, ullptoutf);
+	//Ò»¸ö - faseek(fin, 0, i//º³åÇ
+		//2.ÑéÖ¤ÔÚ²éÕÒ»while (; i < 	whi:endµÄÑ¹Ëõ
+°´Èıibdl×é½«Æäle (µ½ø
+			ÖĞe (; nsert(matchhead, //
+	//Ñ¹Ëõ
+	while (ddrsize), SEert(matchhead,
+	fread( + 2],start,"rad(& 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹ş+£±ííåÈë¹şÈ¡Æ¥ÅäÍ·
+		_ht; nsert(matchhead,  - sih = p( + 2],start,h = p//¼ì²â
+		//2.ÑéÖ¤ÔÚ²éÕÒ»·ûND);eofpen fEindows(FI,(&flagsLOOKHEAD)&&) {
+				//c
+	freadag & 0x80) {e(fiindows(FI)tart,h = Ã×Ö·ûĞ¶ÔĞ´È»Êı²»×ã8Î»ë
+ fouÓÒ´°¿Ú
+	>hea&&½ÓÒ´°¿Ú
+	< 8)curmatc¼ÇÖ¸ÕëÒÆ¶¯(8S-ÈÓÒ´°¿Ú
+f(flag;agsize,size,}#in
+		_hÃ×Ö·ûĞ½«buff	USH+¶ÔĞ´ÈëÑ¹ºÏ²¢tchftr == fin2
+		_h//¿ªÊ¼½âÑ¹hin2,1, rdsizefile	tcount = +;
+	- flagsize-sizeof(filesiin2
+		_
+	fclose(f);
+	lo
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout)hlen = curma2chlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	}ize_(ize +agsize f, 1, rdsize, f = fo	if ((lookahead <= MIN_Ltart+2], start,hashaddr);
+				ze) {
+		if (bitcount == 0) {
+rt++;
+		}ize_¶ÔĞ´Ò»while (t(fout);
+	FILE* f = fo	if ((lookahead <= MIN_LOOKHEAD)&&(<= MIN_Ltart+2], start,hashaddr);
+				ULL encodecount = 0;
+	while (ert++;
+		}½«¶ÔĞ´ËõÎÄÒÆ¶¯µ½¶ÔĞ´buffµÄÆğÊ¼¸öÊı fo	if ((lookahead <= MIN_LOOKHEAD)&&(LOOKHEAD-<= MIN_Ltart+2], start,hashaddr//¿ªÊ¼ê¼ÇÎ»Êë
+			 = ê¼ÇÎ»Êbuff;
+"LZ77.hin2itcount);
+		fputc(WSIZE, fin);
+	}#include"LZ77.hitcount);
+		fputc(ist),ist, S:endÄÚÈf;
+ fout)hlen = curchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+ÖÃµ½ÓÒ´°¿Ú
+	if (!fe/¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½¡w* fı¾İ·ÅÖÃµ½}
+	FILE* füĞÂ¹şÏ£±í
+	_hze -wsize
+	f, 1th.c_str(), size
+	ze), SEth.c_str(),<, rdsize
+	fre
+ fouÓÒ´°¿Ú
+	 cutr(), "rb¡wsize¸öÊ_END);
+	++;
+	t,Êı¾İµÄÆğ¸öÊ8tart,zeofpen fawsize¸& 0x8tr(), "rbofÊÇILE, "rb}
+	FILE* f_END);
+	frĞ´Èrfilepath.c_str(), ÔÚ»}
+	FILEfilepaltr == fin2),is
+		sµÃÇå¿Õ/2.ÑéÖilepal;
+			
+	FILE *fo	if (bit
+	FILE *f 0) {
+
+	frfilepaist¨Î»ÈëÑ¹ËõÎÄ¼ş palif ((lahe-
+	FILE *fo	tart,hashaddrsize), SE}
+	FILE
+	fread(//chÎª255£¬ÒòÎªbuffÔÚ/2.ÑéÖ£¬»¹Ã»	 = fread(¡w* f_END);
+		_ht; lagsize, sizeof(flagsb}
+	FILE, 0 - sizeofpflagsize) - sizeof(files, "rb¡w* f_END);
+	frfilepalagsize, sizeof(flagsth.c_str(),,start,h = pc¼ÇÖ¸ÕëÒÆ¶¯1tart,Êı¾İµÄÆğ, 0 - ¾3
+	tcount = frfile	tcount = ++;
+	- flagsize-sizeof(filesi
+		_
+	fclose(f);
+//¿ªÊ¼½âÑ¹"LZ77.hin2,f, 1, rdsize
+	fre			fwritepen("4.txt", "wb");ist), 1,t(fout);
+	FILE* f = foÖÃµ*lflag = 0;Ğlos		}
+		std:]e
+	ze), SEullpthlength(fout)
+	USH LE* fin,sflag = 0;
+	UCstd:{
+
+	
+		_hten f0	 cu
+	USH s
+		t,Êlagk(flag;t<fileflag = 0;
+	UC
+	USH  sizeof(flag;
+	FILE*ÔÚ»
+	USH 0 - ¾3
+	t<filesiULL encodecount = 0;
+	while (eze-sizeoft<filesize) {
+		if (bitcount == 0) {
+ze-sizeo1);
+	fclflag = 0;file	tcount = i
+		_
+	fclose(f);
+ag & 0x80) {			fwrite,h(fout&windows(FI)e) {
+½«le (mabuff°áÒÆµ½odecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+			f	//Ô­×Ö"(f);.h"= f	//Ô­×Ö·iourmeam = f	//Ô­×Ö·in);
+ch = f	//Ô­×Ö·;//libch = fpragma warnE* (E *able:4996s
+	(f);
+	fclos
+		:¬»¹Ã»(s		}
+		= fge*2]s
+		,ad((;//ËùÒ{
+	f(f);
+~	fcloshÎª251);
+	fcl¬»¹Ã»
+		¬»¹Ã»Ğlos)hlen 		_
+	fclose(f);
+o
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+Èç¹û(ize +	fseATCH) {
+&xt"ò²»´b")
+		}ize_ze +agsize 			fwrite&curmatchdist, sizeof(curmatchdist), 1, fout)hlen = curmachlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	fclose(finf);
+}
+hashaddrf, 1, rdsize, fftellt = +;of(ize +µÄşÖ¸Õë
+ fou, rdsize,(&flags) {
+r(), "rh - 3;
+			fpu, rd smallfout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	}´Ó0;
+	USHt, Sdlib/2.ÑéÖµÄbuff;
+	fclose(finf);
+}
+SET), 1,t(fout)windows(FILE* fin,shlen;
+ch 2 * = fgetc(f);ofÊµ¼Êt, S¶àÉÙÂ¹şÏ£±íåÈë¹şĞsize
+	//Ğ¡_pwie ÖÃÎª0
+	//£±í¡Æ¥ÅäÍ·* füĞÂ¹şÏ£±í
+	_hs(FILE*ze
+	
+	//´óÓÚwsin, 0, SEEze
+	
+	//´óÓÚwsize -wsize
+	//Ğ¡t);
+	e ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!febool isILE* f_en, lude"LZ7 *hin2itcount);2.lzputc(WSIZE, fin);
+	}#include"LZ77.hin2pen("4.txt", "wb");WSIZE, fin);
+	}#in
+		_h//dlibdlibiles¼ÆËãµÄ3
+	}´b")Ç°Á½ibil½atchfor (
+	/i	if (/i	_MATCH) {
+&&(1; ++ir(), "rad(&¡Æ¥Åf	lo(¡Æ¥ÅäÍ·°×Ö·û´®²i]
+		_hÃ×Ö·ûĞ×Ö·ûĞÇÎ»Êë
+ze), SEindows(FI)curmatc´óÓÚwsize -wsize
+	b¡seek(fin, 0, SEEze
+	b//1.½«
+	//Ñ¹Ëõ
+le (ø
+			£¬²¢ize_:endÍ·, "rad(& 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şĞ´È£±íåÈë¹şÈ¡Æ¥ÅäÍ·
+		_ht//2.ÑéÖ¤ÔÚ_pwi/2.ÑéÖ¤ÔÚÇ·ñ<< ":end	_hten f
+	_hs(FIL!cutr(), "rbof<<×î³¤:end,´ø³öSH hashadd, "rb¡seek(fin, 0, SEElongestek(fi	//1.½«µ±Ç°×e;
+	FILE *foåÈë¹ş)tart,h = pen faseek(fin, 0, S_MATCH) {
+r(), "rbofÃ»<< "e (; i < åÈë¹ş¸öÊıÑ¹Ëõr = 0;
+	USHilepalagsizÖ·û´®²åÈë¹ş±íí
+ze-sizeo(fout)
+	//(files¶ÔÓ¦µÄ;
+	FILE* foutf = fopen("3e,size,ÓÒ´°¿Ú
+,_en, sizeo(f++åÈë¹şoutf);
+	//Ò»¸ö, 0 - sieofpflagsize) - sizeof<< "ÁËe (; i < SH hashaddr = 0;
+	USH  e (; i 
+		´SH hxt"ÚĞ´asha¡£ÎªÁËºÍH 0;man½áºÏe (; /¶ÁÈ¡wILE* faseek(fin, 0, S-Èrfilepalagsize,n, íí
+ze-si//×îÉÙÊÇ3¸ö£¬
+		sÓÃ0±íÊ¾3ilepalt<filese;
+	FILE *fo	if (bite;
+	FILE *f 0) {
+ze-sizeo(fout);
+	FILE* foutf = fopen("3È¡wsize,½ÓÒ´°¿Ú
+, ullptoutf);
+	//Ò»¸ö - faseek(fin, 0, i//º³åÇ
+		//2.ÑéÖ¤ÔÚ²éÕÒ»while (; i < 	whi:endµÄÑ¹Ëõ
+°´Èıibdl×é½«Æäle (µ½ø
+			ÖĞe (; nsert(matchhead, //
+	//Ñ¹Ëõ
+	while (ddrsize), SEert(matchhead,
+	fread( + 2],start,"rad(& 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹ş+£±ííåÈë¹şÈ¡Æ¥ÅäÍ·
+		_ht; nsert(matchhead,  - sizeofp( + 2],start,zeofp//¼ì²â
+		//2.ÑéÖ¤ÔÚ²éÕÒ»·ûND); = pen fEindows(FI,(&flagsLOOKHEAD)&&) {
+				//c
+	freadag & 0x80) {e(fiindows(FI)tart,zeofÃ×Ö·ûĞ¶ÔĞ´È»Êı²»×ã8Î»ë
+ fouÓÒ´°¿Ú
+	>hea&&½ÓÒ´°¿Ú
+	< 8)curmatc¼ÇÖ¸ÕëÒÆ¶¯(8S-ÈÓÒ´°¿Ú
+f(flag;agsize,size,}#in
+		_hÃ×Ö·ûĞ½«buff	USH+¶ÔĞ´ÈëÑ¹ºÏ²¢tchftr == fin2
+		_h//¿ªÊ¼½âÑ¹hin2,1, rdsizefile	tcount = +;
+	- flagsize-sizeof(filesiin2
+		_
+	fclose(f);
+	lo
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout)hlen = curma2chlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	}ize_(ize +agsize f, 1, rdsize, f = fo	if ((lookahead <= MIN_Ltart+2], start,hashaddr);
+				ze) {
+		if (bitcount == 0) {
+rt++;
+		}ize_¶ÔĞ´Ò»while (t(fout);
+	FILE* f = fo	if ((lookahead <= MIN_LOOKHEAD)&&(<= MIN_Ltart+2], start,hashaddr);
+				ULL encodecount = 0;
+	while (ert++;
+		}½«¶ÔĞ´ËõÎÄÒÆ¶¯µ½¶ÔĞ´buffµÄÆğÊ¼¸öÊı fo	if ((lookahead <= MIN_LOOKHEAD)&&(LOOKHEAD-<= MIN_Ltart+2], start,hashaddr//¿ªÊ¼ê¼ÇÎ»Êë
+			 = ê¼ÇÎ»Êbuff;
+"LZ77.hin2itcount);
+		fputc(WSIZE, fin);
+	}#include"LZ77.hitcount);
+		fputc(ist),ist, S:endÄÚÈf;
+ fout)hlen = curchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+ÖÃµ½ÓÒ´°¿Ú
+	if (!fe/¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½¡w* fı¾İ·ÅÖÃµ½}
+	FILE* füĞÂ¹şÏ£±í
+	_hze -wsize
+	f, 1th.c_str(), size
+	ze), SEth.c_str(),<, rdsize
+	fre
+ fouÓÒ´°¿Ú
+	 cutr(), "rb¡wsize¸öÊ_END);
+	++;
+	t,Êı¾İµÄÆğ¸öÊ8tart,h = pen fawsize¸& 0x8tr(), "rbofÊÇILE, "rb}
+	FILE* f_END);
+	frĞ´Èrfilepath.c_str(), ÔÚ»}
+	FILEfilepaltr == fin2),is
+		sµÃÇå¿Õ/2.ÑéÖilepal;
+			
+	FILE *fo	if (bit
+	FILE *f 0) {
+
+	frfilepaist¨Î»ÈëÑ¹ËõÎÄ¼ş palif ((lahe-
+	FILE *fo	tart,hashaddrsize), SE}
+	FILE
+	fread(//chÎª255£¬ÒòÎªbuffÔÚ/2.ÑéÖ£¬»¹Ã»	 = fread(¡w* f_END);
+		_ht; lagsize, sizeof(flagsb}
+	FILE, 0 - sih = pflagsize) - sizeof(files, "rb¡w* f_END);
+	frfilepalagsize, sizeof(flagsth.c_str(),,start,zeofpc¼ÇÖ¸ÕëÒÆ¶¯1tart,Êı¾İµÄÆğ, 0 - ¾3
+	tcount = frfile	tcount = ++;
+	- flagsize-sizeof(filesi
+		_
+	fclose(f);
+//¿ªÊ¼½âÑ¹"LZ77.hin2,f, 1, rdsize
+	fre			fwritepen("4.txt", "wb");ist), 1,t(fout);
+	FILE* f = foÖÃµ*lflag = 0;Ğlos		}
+		std:]e
+	ze), SEullpthlength(fout)
+	USH LE* fin,sflag = 0;
+	UCstd:{
+
+	
+		_hten f0	 cu
+	USH s
+		t,Êlagk(flag;t<fileflag = 0;
+	UC
+	USH  sizeof(flag;
+	FILE*ÔÚ»
+	USH 0 - ¾3
+	t<filesiULL encodecount = 0;
+	while (eze-sizeoft<filesize) {
+		if (bitcount == 0) {
+ze-sizeo1);
+	fclflag = 0;file	tcount = i
+		_
+	fclose(f);
+ag & 0x80) {			fwrite,h(fout&windows(FI)e) {
+½«le (mabuff°áÒÆµ½odecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				_
+	ff	//Ô­×Ö"(f);.h"= f	//Ô­×Ö·iourmeam = f	//Ô­×Ö·in);
+ch = f	//Ô­×Ö·;//libch = fpragma warnE* (E *able:4996s
+	(f);
+	fclos
+		:¬»¹Ã»(s		}
+		= fge*2]s
+		,ad((;//ËùÒ{
+	f(f);
+~	fcloshÎª251);
+	fcl¬»¹Ã»
+		¬»¹Ã»Ğlos)hlen 		_
+	fclose(f);
+o
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+Èç¹û(ize +	fseATCH) {
+&xt"ò²»´b")
+		}ize_ze +agsize 			fwrite&curmatchdist, sizeof(curmatchdist), 1, fout)hlen = curmachlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	fclose(finf);
+}
+hashaddrf, 1, rdsize, fftellt = +;of(ize +µÄşÖ¸Õë
+ fou, rdsize,(&flags) {
+r(), "rh - 3;
+			fpu, rd smallfout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	}´Ó0;
+	USHt, Sdlib/2.ÑéÖµÄbuff;
+	fclose(finf);
+}
+SET), 1,t(fout)windows(FILE* fin,shlen;
+ch 2 * = fgetc(f);ofÊµ¼Êt, S¶àÉÙÂ¹şÏ£±íåÈë¹şĞsize
+	//Ğ¡_pwie ÖÃÎª0
+	//£±í¡Æ¥ÅäÍ·* füĞÂ¹şÏ£±í
+	_hs(FILE*ze
+	
+	//´óÓÚwsin, 0, SEEze
+	
+	//´óÓÚwsize -wsize
+	//Ğ¡t);
+	e ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!febool isILE* f_en, lude"LZ7 *hin2itcount);2.lzputc(WSIZE, fin);
+	}#include"LZ77.hin2pen("4.txt", "wb");WSIZE, fin);
+	}#in
+		_h//dlibdlibiles¼ÆËãµÄ3
+	}´b")Ç°Á½ibil½atchfor (
+	/i	if (/i	_MATCH) {
+&&(1; ++ir(), "rad(&¡Æ¥Åf	lo(¡Æ¥ÅäÍ·°×Ö·û´®²i]
+		_hÃ×Ö·ûĞ×Ö·ûĞÇÎ»Êë
+ze), SEindows(FI)curmatc´óÓÚwsize -wsize
+	b¡seek(fin, 0, SEEze
+	b//1.½«
+	//Ñ¹Ëõ
+le (ø
+			£¬²¢ize_:endÍ·, "rad(& 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şĞ´È£±íåÈë¹şÈ¡Æ¥ÅäÍ·
+		_ht//2.ÑéÖ¤ÔÚ_pwi/2.ÑéÖ¤ÔÚÇ·ñ<< ":end	_hten f
+	_hs(FIL!cutr(), "rbof<<×î³¤:end,´ø³öSH hashadd, "rb¡seek(fin, 0, SEElongestek(fi	//1.½«µ±Ç°×e;
+	FILE *foåÈë¹ş)tart,zeofpen faseek(fin, 0, S_MATCH) {
+r(), "rbofÃ»<< "e (; i < åÈë¹ş¸öÊıÑ¹Ëõr = 0;
+	USHilepalagsizÖ·û´®²åÈë¹ş±íí
+ze-sizeo(fout)
+	//(files¶ÔÓ¦µÄ;
+	FILE* foutf = fopen("3e,size,ÓÒ´°¿Ú
+,_en, sizeo(f++åÈë¹şoutf);
+	//Ò»¸ö, 0 - si = pflagsize) - sizeof<< "ÁËe (; i < SH hashaddr = 0;
+	USH  e (; i 
+		´SH hxt"ÚĞ´asha¡£ÎªÁËºÍH 0;man½áºÏe (; /¶ÁÈ¡wILE* faseek(fin, 0, S-Èrfilepalagsize,n, íí
+ze-si//×îÉÙÊÇ3¸ö£¬
+		sÓÃ0±íÊ¾3ilepalt<filese;
+	FILE *fo	if (bite;
+	FILE *f 0) {
+ze-sizeo(fout);
+	FILE* foutf = fopen("3È¡wsize,½ÓÒ´°¿Ú
+, ullptoutf);
+	//Ò»¸ö - faseek(fin, 0, i//º³åÇ
+		//2.ÑéÖ¤ÔÚ²éÕÒ»while (; i < 	whi:endµÄÑ¹Ëõ
+°´Èıibdl×é½«Æäle (µ½ø
+			ÖĞe (; nsert(matchhead, //
+	//Ñ¹Ëõ
+	while (ddrsize), SEert(matchhead,
+	fread( + 2],start,"rad(& 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹ş+£±ííåÈë¹şÈ¡Æ¥ÅäÍ·
+		_ht; nsert(matchhead,  - sih = p( + 2],start,h = p//¼ì²â
+		//2.ÑéÖ¤ÔÚ²éÕÒ»·ûND);eofpen fEindows(FI,(&flagsLOOKHEAD)&&) {
+				//c
+	freadag & 0x80) {e(fiindows(FI)tart,h = Ã×Ö·ûĞ¶ÔĞ´È»Êı²»×ã8Î»ë
+ fouÓÒ´°¿Ú
+	>hea&&½ÓÒ´°¿Ú
+	< 8)curmatc¼ÇÖ¸ÕëÒÆ¶¯(8S-ÈÓÒ´°¿Ú
+f(flag;agsize,size,}#in
+		_hÃ×Ö·ûĞ½«buff	USH+¶ÔĞ´ÈëÑ¹ºÏ²¢tchftr == fin2
+		_h//¿ªÊ¼½âÑ¹hin2,1, rdsizefile	tcount = +;
+	- flagsize-sizeof(filesiin2
+		_
+	fclose(f);
+	lo
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout)hlen = curma2chlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	}ize_(ize +agsize f, 1, rdsize, f = fo	if ((lookahead <= MIN_Ltart+2], start,hashaddr);
+				ze) {
+		if (bitcount == 0) {
+rt++;
+		}ize_¶ÔĞ´Ò»while (t(fout);
+	FILE* f = fo	if ((lookahead <= MIN_LOOKHEAD)&&(<= MIN_Ltart+2], start,hashaddr);
+				ULL encodecount = 0;
+	while (ert++;
+		}½«¶ÔĞ´ËõÎÄÒÆ¶¯µ½¶ÔĞ´buffµÄÆğÊ¼¸öÊı fo	if ((lookahead <= MIN_LOOKHEAD)&&(LOOKHEAD-<= MIN_Ltart+2], start,hashaddr//¿ªÊ¼ê¼ÇÎ»Êë
+			 = ê¼ÇÎ»Êbuff;
+"LZ77.hin2itcount);
+		fputc(WSIZE, fin);
+	}#include"LZ77.hitcount);
+		fputc(ist),ist, S:endÄÚÈf;
+ fout)hlen = curchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+ÖÃµ½ÓÒ´°¿Ú
+	if (!fe/¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½¡w* fı¾İ·ÅÖÃµ½}
+	FILE* füĞÂ¹şÏ£±í
+	_hze -wsize
+	f, 1th.c_str(), size
+	ze), SEth.c_str(),<, rdsize
+	fre
+ fouÓÒ´°¿Ú
+	 cutr(), "rb¡wsize¸öÊ_END);
+	++;
+	t,Êı¾İµÄÆğ¸öÊ8tart,zeofpen fawsize¸& 0x8tr(), "rbofÊÇILE, "rb}
+	FILE* f_END);
+	frĞ´Èrfilepath.c_str(), ÔÚ»}
+	FILEfilepaltr == fin2),is
+		sµÃÇå¿Õ/2.ÑéÖilepal;
+			
+	FILE *fo	if (bit
+	FILE *f 0) {
+
+	frfilepaist¨Î»ÈëÑ¹ËõÎÄ¼ş palif ((lahe-
+	FILE *fo	tart,hashaddrsize), SE}
+	FILE
+	fread(//chÎª255£¬ÒòÎªbuffÔÚ/2.ÑéÖ£¬»¹Ã»	 = fread(¡w* f_END);
+		_ht; lagsize, sizeof(flagsb}
+	FILE, 0 - sizeofpflagsize) - sizeof(files, "rb¡w* f_END);
+	frfilepalagsize, sizeof(flagsth.c_str(),,start,h = pc¼ÇÖ¸ÕëÒÆ¶¯1tart,Êı¾İµÄÆğ, 0 - ¾3
+	tcount = frfile	tcount = ++;
+	- flagsize-sizeof(filesi
+		_
+	fclose(f);
+//¿ªÊ¼½âÑ¹"LZ77.hin2,f, 1, rdsize
+	fre			fwritepen("4.txt", "wb");ist), 1,t(fout);
+	FILE* f = foÖÃµ*lflag = 0;Ğlos		}
+		std:]e
+	ze), SEullpthlength(fout)
+	USH LE* fin,sflag = 0;
+	UCstd:{
+
+	
+		_hten f0	 cu
+	USH s
+		t,Êlagk(flag;t<fileflag = 0;
+	UC
+	USH  sizeof(flag;
+	FILE*ÔÚ»
+	USH 0 - ¾3
+	t<filesiULL encodecount = 0;
+	while (eze-sizeoft<filesize) {
+		if (bitcount == 0) {
+ze-sizeo1);
+	fclflag = 0;file	tcount = i
+		_
+	fclose(f);
+ag & 0x80) {			fwrite,h(fout&windows(FI)e) {
+½«le (mabuff°áÒÆµ½odecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+			f	//Ô­×Ö"(f);.h"= f	//Ô­×Ö·iourmeam = f	//Ô­×Ö·in);
+ch = f	//Ô­×Ö·;//libch = fpragma warnE* (E *able:4996s
+	(f);
+	fclos
+		:¬»¹Ã»(s		}
+		= fge*2]s
+		,ad((;//ËùÒ{
+	f(f);
+~	fcloshÎª251);
+	fcl¬»¹Ã»
+		¬»¹Ã»Ğlos)hlen 		_
+	fclose(f);
+o
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+Èç¹û(ize +	fseATCH) {
+&xt"ò²»´b")
+		}ize_ze +agsize 			fwrite&curmatchdist, sizeof(curmatchdist), 1, fout)hlen = curmachlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	fclose(finf);
+}
+hashaddrf, 1, rdsize, fftellt = +;of(ize +µÄşÖ¸Õë
+ fou, rdsize,(&flags) {
+r(), "rh - 3;
+			fpu, rd smallfout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+	}´Ó0;
+	USHt, Sdlib/2.ÑéÖµÄbuff;
+	fclose(finf);
+}
+SET), 1,t(fout)windows(FILE* fin,shlen;
+ch 2 * = fgetc(f);ofÊµ¼Êt, S¶àÉÙÂ¹şÏ£±íåÈë¹şĞsize
+	//Ğ¡_pwie ÖÃÎª0
+	//£±í¡Æ¥ÅäÍ·* füĞÂ¹şÏ£±í
+	_hs(FILE*ze
+	
+	//´óÓÚwsin, 0, SEEze
+	
+	//´óÓÚwsize -wsize
+	//Ğ¡t);
+	e ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!febool isILE* f_en, lude"LZ7 *hin2itcount);2.lzputc(WSIZE, fin);
+	}#include"LZ77.hin2pen("4.txt", "wb");WSIZE, fin);
+	}#in
+		_h//dlibdlibiles¼ÆËãµÄ3
+	}´b")Ç°Á½ibil½atchfor (
+	/i	if (/i	_MATCH) {
+&&(1; ++ir(), "rad(&¡Æ¥Åf	lo(¡Æ¥ÅäÍ·°×Ö·û´®²i]
+		_hÃ×Ö·ûĞ×Ö·ûĞÇÎ»Êë
+ze), SEindows(FI)curmatc´óÓÚwsize -wsize
+	b¡seek(fin, 0, SEEze
+	b//1.½«
+	//Ñ¹Ëõ
+le (ø
+			£¬²¢ize_:endÍ·, "rad(& 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şĞ´È£±íåÈë¹şÈ¡Æ¥ÅäÍ·
+		_ht//2.ÑéÖ¤ÔÚ_pwi/2.ÑéÖ¤ÔÚÇ·ñ<< ":end	_hten f
+	_hs(FIL!cutr(), "rbof<<×î³¤:end,´ø³öSH hashadd, "rb¡seek(fin, 0, SEElongestek(fi	//1.½«µ±Ç°×e;
+	FILE *foåÈë¹ş)tart,h = pen faseek(fin, 0, S_MATCH) {
+r(), "rbofÃ»<< "e (; i < åÈë¹ş¸öÊıÑ¹Ëõr = 0;
+	USHilepalagsizÖ·û´®²åÈë¹ş±íí
+ze-sizeo(fout)
+	//(files¶ÔÓ¦µÄ;
+	FILE* foutf = fopen("3e,size,ÓÒ´°¿Ú
+,_en, sizeo(f++åÈë¹şoutf);
+	//Ò»¸ösfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}
+}
+#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}
+}
+#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}vvv#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}
+}
+#include"LZ77.h"
+#include<iostream>
+#include<assert.h>
+#include<stdlib.h>
+#pragma warning(disable:4996)
+LZ77::LZ77()
+	:_pwin(new UCH[WSIZE*2])
+	,_ht(WSIZE){}
+LZ77::~LZ77() {
+	delete[] _pwin;
+	_pwin = nullptr;
+}
+void LZ77::compressfile(const std::string & strfilepath) {
+	//Èç¹ûÔ´ÎÄ¼şĞ¡ÓÚMIN_MATCH £¬Ôò²»´¦Àí
+	//»ñÈ¡ÎÄ¼ş´óĞ¡
+	FILE* fin = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	fseek(fin, 0, SEEK_END);
+	ULL filesize = ftell(fin);//Ô´ÎÄ¼şµÄsize
+	if (filesize <= MIN_MATCH) {
+		std::cout << "file small" << std::endl;
+		return;
+	}
+	//´ÓÑ¹ËõÎÄ¼ş¶ÁÈ¡Ò»¸ö»º³åÇøµÄÊı¾İ
+	fseek(fin, 0, SEEK_SET);
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//Êµ¼Ê¶ÁÈ¡¶àÉÙ
+	USH start = 0;
+	//Óë²éÕÒÏà¹Ø±äÁ¿
+	USH hashaddr = 0;
+	USH matchhead = 0;
+	USH curmatchlength = 0;
+	USH curmatchdist = 0;
+	//ÓëĞ´±ê¼ÇÏà¹Ø±äÁ¿
+	UCH chflag = 0;
+	UCH bitcount = 0;
+	bool islen = false;
+	FILE *fout = fopen("2.lzp", "wb");
+	assert(fout);
+	FILE* foutf = fopen("3.txt", "wb");
+	assert(foutf);
+	//Ò»¸öÒ»¸ö×Ö·û¼ÆËãµÄ
+	//´¦ÀíÇ°Á½¸ö×Ö½Ú
+	for (USH i = 0; i < MIN_MATCH - 1; ++i) {
+		_ht.hashfunc(hashaddr, _pwin[i]);
+	}
+	//
+	//Ñ¹Ëõ
+	while (lookahead) {
+		curmatchdist = 0;
+		curmatchlength = 0;
+		//1.½«µ±Ç°×Ö·û´®²åÈë¹şÏ£±í£¬²¢»ñÈ¡Æ¥ÅäÍ·
+		_ht.insert(matchhead, _pwin[start + 2],start,hashaddr);
+		//2.ÑéÖ¤ÔÚ²éÕÒ»º³åÇøÖĞÊÇ·ñÕÒµ½Æ¥Åä
+		if (matchhead != 0) {
+			//ÕÒ×î³¤Æ¥Åä,´ø³ö³¤¶È¾àÀë¶Ô
+			curmatchlength = longestmatch(matchhead, curmatchdist,start);
+		}
+		if (curmatchlength < MIN_MATCH) {
+			//Ã»ÕÒµ½
+			//½«startÎ»ÖÃ×Ö·ûĞ´ÈëÑ¹ËõÎÄ¼ş
+			fputc(_pwin[start], fout);
+			//Ğ´µ±Ç°Ô­×Ö·û¶ÔÓ¦µÄ±ê¼Ç
+			writeflage(foutf,chflag,bitcount,false);
+			++start;
+			lookahead--;
+			
+		}
+		else {
+			//ÕÒµ½ÁË
+			//½«³¤¶È¾àÀë¶ÔĞ´ÈëÑ¹ËõÎÄ¼ş  
+			//ÏÈĞ´³¤¶È£¬ÔÚĞ´¾àÀë¡£ÎªÁËºÍHuffman½áºÏ
+			UCH chlen = curmatchlength - 3;
+			fputc(chlen, fout);//×îÉÙÊÇ3¸ö£¬ËùÒÔÓÃ0±íÊ¾3
+			fwrite(&curmatchdist, sizeof(curmatchdist), 1, fout);
+			//Ğ´±ê¼Ç
+			writeflage(foutf, chflag, bitcount, true);
+			lookahead -= curmatchlength;//¸üĞÂÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö½ÚÊı
+			//½«ÒÑ¾­Æ¥ÅäµÄ×Ö·û´®°´Èı¸öÒ»×é½«Æä²åÈëµ½¹şÏ£±íÖĞ
+			--curmatchlength;//µ±Ç°×Ö·û´®ÒÑ¾­²åÈë
+			while (curmatchlength) {
+				start++;
+				_ht.insert(matchhead, _pwin[start+2], start,hashaddr);
+				--curmatchlength;
+			}
+			start++;
+		}
+		//¼ì²âÏÈĞĞ»º³åÇøÖĞÊ£Óà×Ö·û¸öÊı
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
+		}
+	}
+	//±ê¼ÇÎ»Êı²»×ã8Î»
+	if (bitcount > 0 && bitcount < 8) {
+		chflag <<= (8 - bitcount);
+		fputc(chflag,foutf);
+	}
+	//½«Êı¾İÎÄ¼ş+±ê¼ÇÎÄ¼şºÏ²¢
+	fflush(foutf);
+	mergefile(fout, filesize);
+	fclose(fin);
+	fclose(fout);
+	fclose(foutf);
+}
+void LZ77::uncompressfile(const std::string & strfilepath) {
+	//´ò¿ªÑ¹Ëõ,±ê¼ÇÎÄ¼şÖ¸Õë
+	FILE* fin1 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin1) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	FILE* fin2 = fopen(strfilepath.c_str(), "rb");
+	if (nullptr == fin2) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	//»ñÈ¡Ô´ÎÄ¼ş´óĞ¡
+	ULL filesize = 0;
+	fseek(fin2, 0 - sizeof(filesize), SEEK_END);
+	fread(&filesize, sizeof(filesize), 1, fin2);
+	//»ñÈ¡±ê¼Ç×Ö½ÚÊı
+	size_t flagsize = 0;
+	fseek(fin2, 0 - sizeof(flagsize) - sizeof(filesize), SEEK_END);
+	fread(&flagsize, sizeof(flagsize), 1, fin2);
+	//½«±ê¼ÇÖ¸ÕëÒÆ¶¯µ½±ê¼ÇÊı¾İµÄÆğÊ¼Î»ÖÃ
+	fseek(fin2, 0 - sizeof(flagsize) - flagsize-sizeof(filesize), SEEK_END);
+	//¿ªÊ¼½âÑ¹Ëõ
+	//Ğ´Èë½âÑ¹ËõÊı¾İ
+	FILE* fout = fopen("4.txt", "wb");
+	assert(fout);
+	FILE* f = fopen("4.txt", "rb");//¶ÁÈ¡Æ¥ÅäÄÚÈİ
+	if (nullptr == f) {
+		std::cout << "open false" << std::endl;
+		return;
+	}
+	UCH bitcount = 0;
+	UCH chflag = 0;
+	UCH ch = 0;
+	UCH matchlen = 0;
+	USH matchdist = 0;
+	ULL encodecount = 0;
+	while (encodecount<filesize) {
+		if (bitcount == 0) {
+			chflag = fgetc(fin2);
+			bitcount = 8;
+		}
+		if (chflag & 0x80) {
+			//ÊÇlen
+			matchlen = fgetc(fin1) + 3;
+			encodecount += matchlen;
+			fflush(fout);//ËùÒÔµÃÇå¿Õ»º³åÇø
+			fread(&matchdist, sizeof(matchdist), 1, fin1);
+			//¶¨Î»ÎÄ¼şÖ¸Õë
+			fseek(f, 0-matchdist, SEEK_END);
+			while (matchlen) {
+				//chÎª255£¬ÒòÎªÊı¾İÔÚ»º³åÇø£¬»¹Ã»Ğ´Èë
+				ch = fgetc(f);
+				fputc(ch, fout);
+				matchlen--;
+			}
+		}
+		else {
+			//Ô­×Ö·û
+			ch = fgetc(fin1);
+			fputc(ch, fout);
+			encodecount++;
+		}
+		chflag <<= 1;
+		bitcount--;
+	}
+	fclose(fin1);
+	fclose(fin2);
+	fclose(fout);
+	fclose(f);
+}
+void LZ77::mergefile(FILE* fout,ULL filesize) {
+	FILE* finf = fopen("3.txt", "rb");
+	size_t flagsize = 0;
+	UCH* preadbuff = new UCH[1024];
+	while (true) {
+		size_t rdsize = fread(preadbuff, 1, 1024, finf);
+		if (0 == rdsize)
+			break;
+		fwrite(preadbuff, 1, rdsize, fout);
+		flagsize += rdsize;
+	}
+	fwrite(&flagsize, sizeof(flagsize), 1, fout);
+	fwrite(&filesize, sizeof(filesize), 1, fout);
+	delete[] preadbuff;
+	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//½«ÓÒ´°¿ÚÊı¾İ°áÒÆµ½×ó´°¿Ú
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//¸üĞÂ¹şÏ£±í
+	_ht.update();
+	//head prev ÖĞ±£´æµÄÏÂ±ê
+	//´óÓÚwsize -wsize
+	//Ğ¡ÓÚwsize ÖÃÎª0
+	//¶ÁÈ¡wsize¸öÊı¾İ·ÅÖÃµ½ÓÒ´°¿Ú
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}

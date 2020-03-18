@@ -1,3 +1,2 @@
 ﻿  LZ77.cpp
-h:\filecompress\filecompree\lz77.cpp(29): warning C4267: “初始化”: 从“size_t”转换到“USH”，可能丢失数据
   Filecompree.vcxproj -> H:\filecompress\Filecompree\Debug\Filecompree.exe

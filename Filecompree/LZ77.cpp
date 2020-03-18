@@ -26,7 +26,7 @@ void LZ77::compressfile(const std::string & strfilepath) {
 	}
 	//从压缩文件读取一个缓冲区的数据
 	fseek(fin, 0, SEEK_SET);
-	USH  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//实际读取多少
+	size_t  lookahead = fread(_pwin, 1, 2 * WSIZE, fin);//实际读取多少
 	USH start = 0;
 	//与查找相关变量
 	USH hashaddr = 0;
@@ -86,6 +86,10 @@ void LZ77::compressfile(const std::string & strfilepath) {
 				--curmatchlength;
 			}
 			start++;
+		}
+		//检测先行缓冲区中剩余字符个数
+		if ((lookahead <= MIN_LOOKHEAD)&&(!feof(fin))) {
+			fillwindows(fin,lookahead);
 		}
 	}
 	//标记位数不足8位
@@ -155,6 +159,7 @@ void LZ77::uncompressfile(const std::string & strfilepath) {
 				ch = fgetc(f);
 				fputc(ch, fout);
 				matchlen--;
+				fflush(fout);
 			}
 		}
 		else {
@@ -186,4 +191,18 @@ void LZ77::mergefile(FILE* fout,ULL filesize) {
 	fwrite(&filesize, sizeof(filesize), 1, fout);
 	delete[] preadbuff;
 	fclose(finf);
+}
+void LZ77::fillwindows(FILE* fin,size_t& lookahead){
+	//将右窗口数据搬移到左窗口
+	memcpy(_pwin, _pwin + WSIZE, WSIZE);
+
+	//更新哈希表
+	_ht.update();
+	//head prev 中保存的下标
+	//大于wsize -wsize
+	//小于wsize 置为0
+	//读取wsize个数据放置到右窗口
+	if (!feof(fin)) {
+		lookahead += fread(_pwin + WSIZE, 1, WSIZE, fin);
+	}
 }
